@@ -154,6 +154,7 @@ UPROGS=\
 	$U/_fork\
 	$U/_exec\
 	$U/_forkexec\
+	$U/_redirect\
 
 
 ifeq ($(LAB),syscall)
