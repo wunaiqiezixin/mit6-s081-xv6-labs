@@ -131,7 +131,7 @@ kvmpa(uint64 va)
   uint64 off = va % PGSIZE;
   pte_t *pte;
   uint64 pa;
-  
+
   pte = walk(kernel_pagetable, va, 0);
   if(pte == 0)
     panic("kvmpa");
@@ -341,7 +341,7 @@ void
 uvmclear(pagetable_t pagetable, uint64 va)
 {
   pte_t *pte;
-  
+
   pte = walk(pagetable, va, 0);
   if(pte == 0)
     panic("uvmclear");
@@ -439,4 +439,39 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+
+// Print a page table
+static int
+vmprint_helper(pagetable_t pagetable, int depth)
+{
+  // There are 2^9 = 512 PTEs in a page table
+  for (int i = 0; i < 512; ++i) {
+    pte_t pte = pagetable[i];
+    if ((pte & PTE_V) == 0) /* 优先级："==" > "&" "*/
+      continue; // 如果该 PTE 无效，无需再打印对应的页表
+
+    // 当前第 depth+1 级页表，打印 depth+1 个 ".."
+    printf("..");
+    for (int i = 0; i < depth; ++i)
+      printf(" ..");
+    // 按格式打印页表内容
+    uint64 child = PTE2PA(pte);
+    printf("%d: pte %p pa %p\n", i, pte, child);
+
+    // 如果该 PTE 对应的不是物理地址，递归打印其对应的中间页表
+    if ((pte & (PTE_R | PTE_W | PTE_X)) == 0)
+      vmprint_helper((pagetable_t) child, depth + 1);
+  }
+  return 0;
+}
+
+int
+vmprint(pagetable_t pagetable)
+{
+  // 按格式打印顶级页表 pagetable
+  printf("page table %p\n", pagetable);
+  // 递归打印中间页表
+  return vmprint_helper(pagetable, 0);
 }
