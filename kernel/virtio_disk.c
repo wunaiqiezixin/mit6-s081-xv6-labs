@@ -16,6 +16,7 @@
 #include "fs.h"
 #include "buf.h"
 #include "virtio.h"
+#include "proc.h"
 
 // the address of virtio mmio register r.
 #define R(r) ((volatile uint32 *)(VIRTIO0 + (r)))
@@ -41,9 +42,9 @@ static struct disk {
     struct buf *b;
     char status;
   } info[NUM];
-  
+
   struct spinlock vdisk_lock;
-  
+
 } __attribute__ ((aligned (PGSIZE))) disk;
 
 void
@@ -59,7 +60,7 @@ virtio_disk_init(void)
      *R(VIRTIO_MMIO_VENDOR_ID) != 0x554d4551){
     panic("could not find virtio disk");
   }
-  
+
   status |= VIRTIO_CONFIG_S_ACKNOWLEDGE;
   *R(VIRTIO_MMIO_STATUS) = status;
 
@@ -184,7 +185,7 @@ virtio_disk_rw(struct buf *b, int write)
     }
     sleep(&disk.free[0], &disk.vdisk_lock);
   }
-  
+
   // format the three descriptors.
   // qemu's virtio-blk.c reads them.
 
@@ -203,7 +204,7 @@ virtio_disk_rw(struct buf *b, int write)
 
   // buf0 is on a kernel stack, which is not direct mapped,
   // thus the call to kvmpa().
-  disk.desc[idx[0]].addr = (uint64) kvmpa((uint64) &buf0);
+  disk.desc[idx[0]].addr = (uint64) kvmpa(myproc()->perproc_kernel_pagetable, (uint64) &buf0);
   disk.desc[idx[0]].len = sizeof(buf0);
   disk.desc[idx[0]].flags = VRING_DESC_F_NEXT;
   disk.desc[idx[0]].next = idx[1];
@@ -258,7 +259,7 @@ virtio_disk_intr()
 
     if(disk.info[id].status != 0)
       panic("virtio_disk_intr status");
-    
+
     disk.info[id].b->disk = 0;   // disk is done with buf
     wakeup(disk.info[id].b);
 
