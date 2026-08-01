@@ -182,6 +182,10 @@ int             vmprint(pagetable_t); // Print a page table
 pagetable_t     kvminit_perproc();
 void            kvmmap_perproc(pagetable_t);
 void            kvm_free_perproc_kernel_pagetable(pagetable_t);
+int             copyin_new(pagetable_t, char *, uint64, uint64);
+int             copyinstr_new(pagetable_t, char *, uint64, uint64);
+int             kvmcopymappings(pagetable_t, pagetable_t, uint64, uint64);
+uint64          kvmdealloc(pagetable_t, uint64, uint64);
 
 // plic.c
 void            plicinit(void);
