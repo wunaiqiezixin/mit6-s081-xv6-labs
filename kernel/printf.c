@@ -132,3 +132,18 @@ printfinit(void)
   initlock(&pr.lock, "pr");
   pr.locking = 1;
 }
+
+// 遍历帧指针，打印函数地址
+void
+backtrace(void)
+{
+  uint64 fp = r_fp();
+  uint64 stack_bottom = PGROUNDDOWN(fp); // 内核栈所在页的起始地址
+
+  printf("backtrace:\n");
+  while (fp != 0 && PGROUNDDOWN(fp) == stack_bottom) {
+    uint64 ra = *(uint64*)(fp - 8); // 当前帧的返回地址
+    printf("%p\n", ra);
+    fp = *(uint64*)(fp - 16); // 上一层帧的 fp
+  }
+}
