@@ -5,6 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -244,8 +246,7 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
       return 0;
     }
     memset(mem, 0, PGSIZE);
-    if(mappages(pagetable, a, PGSIZE, (uint64)mem, PTE_W|PTE_X|PTE_R|PTE_U) != 0){
-      kfree(mem);
+    if(mappages(pagetable, a, PGSIZE, (uint64)mem, PTE_W|PTE_X|PTE_R|PTE_U) != 0){ kfree(mem);
       uvmdealloc(pagetable, a, oldsz);
       return 0;
     }
@@ -317,9 +318,11 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
-      panic("uvmcopy: pte should exist");
+      // panic("uvmcopy: pte should exist");
+      continue;
     if((*pte & PTE_V) == 0)
-      panic("uvmcopy: page not present");
+      // panic("uvmcopy: page not present");
+      continue;
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)
@@ -358,8 +361,13 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 {
   uint64 n, va0, pa0;
 
+
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
+
+    if (uvmshouldlazyalloc(va0))
+      uvmlazyalloc(va0);
+
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
       return -1;
@@ -383,8 +391,11 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 {
   uint64 n, va0, pa0;
 
+
   while(len > 0){
     va0 = PGROUNDDOWN(srcva);
+    if (uvmshouldlazyalloc(va0))
+      uvmlazyalloc(va0);
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
       return -1;
@@ -412,6 +423,10 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 
   while(got_null == 0 && max > 0){
     va0 = PGROUNDDOWN(srcva);
+
+    if (uvmshouldlazyalloc(va0))
+      uvmlazyalloc(va0);
+
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
       return -1;
@@ -440,5 +455,36 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
     return 0;
   } else {
     return -1;
+  }
+}
+
+
+int
+uvmshouldlazyalloc(uint64 fault_va)
+{
+  struct proc *p = myproc();
+  pte_t *pte = 0;
+  uint64 usp = PGROUNDDOWN(p->trapframe->sp);
+
+  return fault_va < p->sz // 虚拟地址需要在进程地址空间内
+      && !(fault_va >= usp - PGSIZE && fault_va < usp) // 不是 guard page
+      && (((pte = walk(p->pagetable, fault_va, 0)) == 0) || ((*pte & PTE_V) == 0)); // pte 不存在
+}
+
+void
+uvmlazyalloc(uint64 fault_va)
+{
+  struct proc *p = myproc();
+  char* pa = kalloc();
+  if (pa == 0) {
+    printf("lazy alloc: kalloc\n");
+    p->killed = 1;
+  } else {
+    memset(pa, 0, PGSIZE);
+    if(mappages(p->pagetable, PGROUNDDOWN(fault_va), PGSIZE, (uint64)pa, PTE_W|PTE_X|PTE_R|PTE_U) != 0) {
+      printf("lazy alloc: failed to map page\n");
+      kfree(pa);
+      p->killed = 1;
+    }
   }
 }
