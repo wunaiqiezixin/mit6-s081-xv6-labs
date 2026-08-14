@@ -5,6 +5,10 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+// #include "proc.h"
+// #include "spinlock.h"
+#include "spinlock.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -131,7 +135,7 @@ kvmpa(uint64 va)
   uint64 off = va % PGSIZE;
   pte_t *pte;
   uint64 pa;
-  
+
   pte = walk(kernel_pagetable, va, 0);
   if(pte == 0)
     panic("kvmpa");
@@ -311,7 +315,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
+  // char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
@@ -319,14 +323,21 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
+
+    if ((*pte & PTE_W))
+      *pte = (*pte & ~PTE_W) | PTE_COW;
+
     flags = PTE_FLAGS(*pte);
+    /*
     if((mem = kalloc()) == 0)
       goto err;
     memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+    */
+    if(mappages(new, i, PGSIZE, (uint64)pa, flags) != 0){
+      // kfree(mem);
       goto err;
     }
+    kcowref((void*)pa);
   }
   return 0;
 
@@ -341,7 +352,7 @@ void
 uvmclear(pagetable_t pagetable, uint64 va)
 {
   pte_t *pte;
-  
+
   pte = walk(pagetable, va, 0);
   if(pte == 0)
     panic("uvmclear");
@@ -358,6 +369,8 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
+    if (uvmcheckcowpage(va0))
+      uvmdocow(va0);
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
       return -1;
@@ -439,4 +452,39 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+int
+uvmcheckcowpage(uint64 va)
+{
+  struct proc *p = myproc();
+  pte_t *pte = 0;
+
+  return va < p->sz
+      && ((pte = walk(p->pagetable, va, 0)) != 0)
+      && (*pte & PTE_V)
+      && (*pte & PTE_COW)
+      ;
+}
+
+int
+uvmdocow(uint64 va)
+{
+  struct proc *p = myproc();
+  pte_t *pte;
+
+  if ((pte = walk(p->pagetable, va, 0)) == 0)
+    panic("uvmdocow: walk");
+
+  uint64 pa = PTE2PA(*pte);
+  uint64 newpa = (uint64)kcowderef((char*)pa);
+  if (newpa == 0)
+    return -1;
+
+  uint64 flags = (PTE_FLAGS(*pte) | PTE_W) & ~PTE_COW;
+  uvmunmap(p->pagetable, PGROUNDDOWN(va), 1, 0);
+  if (mappages(p->pagetable, PGROUNDDOWN(va), PGSIZE, newpa, flags) == -1)
+    panic("uvmdocow: uvmmappages");
+
+  return 0;
 }
