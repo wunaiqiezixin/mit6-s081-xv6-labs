@@ -91,13 +91,6 @@ kalloc(void)
 {
   struct run *r;  // 待返回的页
   struct run *rr;
-/*
-  acquire(&kmem.lock);
-  r = kmem.freelist;
-  if(r)
-    kmem.freelist = r->next;
-  release(&kmem.lock);
-*/
 
   push_off();
 
