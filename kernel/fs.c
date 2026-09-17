@@ -476,8 +476,8 @@ itrunc(struct inode *ip)
             bfree(ip->dev, aa[j]);
         }
         brelse(bbp);
+        bfree(ip->dev, a[i]);
       }
-      bfree(ip->dev, a[i]);
     }
     brelse(bp);
     bfree(ip->dev, ip->addrs[NDIRECT+1]);
