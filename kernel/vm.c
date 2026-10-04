@@ -4,7 +4,13 @@
 #include "elf.h"
 #include "riscv.h"
 #include "defs.h"
+#include "fcntl.h"
+#include "spinlock.h"
+#include "sleeplock.h"
 #include "fs.h"
+#include "buf.h"
+#include "file.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -45,7 +51,7 @@ kvmmake(void)
 
   // map kernel stacks
   proc_mapstacks(kpgtbl);
-  
+
   return kpgtbl;
 }
 
@@ -330,7 +336,7 @@ void
 uvmclear(pagetable_t pagetable, uint64 va)
 {
   pte_t *pte;
-  
+
   pte = walk(pagetable, va, 0);
   if(pte == 0)
     panic("uvmclear");
@@ -428,4 +434,93 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+struct vma*
+findvma(uint64 addr)
+{
+  struct proc* p = myproc();
+  for (int i = 0; i < NVMA; i++) {
+    if (p->vmas[i].valid &&
+        addr >= p->vmas[i].vmastart && addr < p->vmas[i].vmastart + p->vmas[i].sz)
+      return &p->vmas[i];
+  }
+  return 0;
+}
+
+int
+vmaalloc(uint64 addr)
+{
+  struct proc* p = myproc();
+  uint64 pa;
+  pte_t* pte;
+  struct vma* v = findvma(addr);
+  if (v == 0)
+    return -1;
+
+  uint64 va = PGROUNDDOWN(addr);
+  pte = walk(p->pagetable, va, 0);
+  if (pte && (*pte & PTE_V))
+    return 0;
+
+  pa = (uint64)kalloc();
+  if (pa == 0)
+    return -1;
+  memset((void*)pa, 0, PGSIZE);
+  if (v->f) {
+    uint64 off = v->offset + va - v->vmastart;
+    begin_op();
+    ilock(v->f->ip);
+    readi(v->f->ip, 0, pa, off, PGSIZE);
+    iunlock(v->f->ip);
+    end_op();
+  }
+
+  int perm = PTE_U;
+  if (v->prot & PROT_READ)
+    perm |= PTE_R;
+  if (v->prot & PROT_EXEC)
+    perm |= PTE_X;
+  if (v->prot & PROT_WRITE)
+    perm |= PTE_W;
+
+  if (mappages(p->pagetable, va, PGSIZE, (uint64)pa, perm) < 0)
+    return -1;
+
+  return 0;
+}
+
+void
+vmaunmap(pagetable_t pagetable, struct vma* v, uint64 va, uint64 npages)
+{
+  uint64 a;
+  pte_t *pte;
+
+  if((va % PGSIZE) != 0)
+    return;
+
+  for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
+    if((pte = walk(pagetable, a, 0)) == 0)
+      continue;
+    if((*pte & PTE_V) == 0)
+      continue;
+    if(PTE_FLAGS(*pte) == PTE_V)
+      continue;
+
+    uint64 pa = PTE2PA(*pte);
+
+    if (v->f && (v->flags & MAP_SHARED) && (*pte & PTE_D)) {
+      uint64 off = v->offset + (a - v->vmastart);
+      begin_op();
+      ilock(v->f->ip);
+      writei(v->f->ip, 0, pa, off, PGSIZE);
+      iunlock(v->f->ip);
+      end_op();
+    }
+
+    kfree((void*)pa);
+    *pte = 0;
+  }
+
+  sfence_vma();
 }

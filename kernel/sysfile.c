@@ -15,6 +15,7 @@
 #include "sleeplock.h"
 #include "file.h"
 #include "fcntl.h"
+#include "memlayout.h"
 
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
@@ -393,7 +394,7 @@ sys_chdir(void)
   char path[MAXPATH];
   struct inode *ip;
   struct proc *p = myproc();
-  
+
   begin_op();
   if(argstr(0, path, MAXPATH) < 0 || (ip = namei(path)) == 0){
     end_op();
@@ -482,5 +483,99 @@ sys_pipe(void)
     fileclose(wf);
     return -1;
   }
+  return 0;
+}
+
+uint64
+sys_mmap(void)
+{
+  uint64 addr, sz, offset;
+  int flags, prot, fd;
+  struct vma* v = 0;
+  struct file* f = 0;
+
+  struct proc* p = myproc();
+
+  if (argaddr(0, &addr) < 0 || argaddr(1, &sz) < 0 || argint(2, &prot) < 0 ||
+      argint(3, &flags) < 0 || argfd(4, &fd, &f) < 0 || argaddr(5, &offset) < 0)
+    return -1;
+
+  if ((!f->writable && !(flags & MAP_PRIVATE) && (prot & PROT_WRITE)) ||
+      (!f->readable && (prot & PROT_READ)))
+    return -1;
+
+  uint64 vmaend = MMAPEND;
+
+  for (int i = 0; i < NVMA; i++) {
+    if (p->vmas[i].valid == 0) {
+      if (v == 0)
+        v = &p->vmas[i];
+    }
+    else if (vmaend > p->vmas[i].vmastart)
+      vmaend = p->vmas[i].vmastart;
+  }
+
+  if (v == 0)
+    panic("mmap: no free vma");
+
+  v->valid = 1;
+  v->vmastart = vmaend - sz;
+  v->sz = sz;
+  v->offset = offset;
+  v->f = f;
+  v->prot = prot;
+  v->flags = flags;
+
+  filedup(f);
+
+  return v->vmastart;
+}
+
+uint64
+sys_munmap(void)
+{
+  struct proc* p =  myproc();
+  struct vma* v = 0;
+  uint64 addr, sz, va;
+
+  if (argaddr(0, &addr) < 0 || argaddr(1, &sz) < 0 || sz == 0)
+    return -1;
+
+  if ((v = findvma(addr)) == 0)
+    return -1;
+
+  if (addr > v->vmastart && addr + sz < v->vmastart + v->sz)
+    return -1;
+
+  va = addr;
+  if (addr > v->vmastart)
+    va = PGROUNDUP(addr);
+
+  if (sz <= va-addr)
+    return 0;
+  sz -= va - addr;
+
+  if (va + sz > v->vmastart + v->sz)
+    sz = v->vmastart + v->sz - va;
+
+  uint64 npages = sz / PGSIZE;
+  uint64 newsz = npages*PGSIZE;
+
+  vmaunmap(p->pagetable, v, va, npages);
+
+  if (va == v->vmastart) {
+    v->offset += (va + newsz) - v->vmastart;
+    v->vmastart = va + newsz;
+  }
+
+  if (v->sz <= newsz) {
+    v->sz = 0;
+    v->valid = 0;
+    if (v->f)
+      fileclose(v->f);
+  }
+  else
+    v->sz -= newsz;
+
   return 0;
 }
