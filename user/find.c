@@ -64,7 +64,6 @@ find(char* path, char* name)
       memmove(p, de.name, DIRSIZ);
       p[DIRSIZ] = 0;
       find(buf, name);
-      strcpy(buf, path); // 回溯
     }
     break;
   }
